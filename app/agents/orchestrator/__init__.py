@@ -1,1 +1,5 @@
-"""Orchestrator Agent — to be implemented in Module 5."""
+"""Orchestrator Agent module."""
+
+from app.agents.orchestrator.router import HandoffRouter
+
+__all__ = ["HandoffRouter"]

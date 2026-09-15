@@ -282,6 +282,10 @@ class WorkflowState(BaseModel):
         default_factory=dict,
         description="Per-agent retry counter.",
     )
+    clarification_attempts: dict[str, int] = Field(
+        default_factory=dict,
+        description="Clarification attempt counter per rule_id (loop tracking).",
+    )
 
     # ── Output ────────────────────────────────────────────────────────────────
     final_report: Optional[str] = Field(

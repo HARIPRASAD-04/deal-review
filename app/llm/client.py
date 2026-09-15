@@ -139,41 +139,25 @@ class GoogleLLMClient:
 class FakeLLMClient:
     """Deterministic LLM client for use in automated tests.
 
-    Returns a pre-configured ``response`` or raises a pre-configured
-    ``error``.  Never makes network calls.
+    Returns a pre-configured ``response``, sequence of ``responses``, or
+    raises a pre-configured ``raise_error``.  Never makes network calls.
 
     Args:
         response:    The ``BaseModel`` instance to return on every call.
-                     If ``None`` and ``raise_error`` is also ``None``, returns
-                     an instance of the requested ``response_schema``
-                     constructed with no arguments (may raise if required
-                     fields are missing).
+        responses:   Optional sequence of ``BaseModel`` instances to return
+                     on consecutive calls.
         raise_error: If set, ``get_structured_completion`` raises this instead
                      of returning a response.
-
-    Example::
-
-        from app.llm.schemas import ExtractionOutput, ExtractedTermSchema
-        from app.models.terms import TermCategory
-
-        fake_output = ExtractionOutput(terms=[
-            ExtractedTermSchema(
-                name="interest_rate",
-                value="8.5% per annum",
-                category=TermCategory.RATE,
-                confidence=0.99,
-                evidence_ids=["EV-018"],
-            )
-        ])
-        client = FakeLLMClient(response=fake_output)
     """
 
     def __init__(
         self,
         response: Optional[BaseModel] = None,
+        responses: Optional[list[BaseModel]] = None,
         raise_error: Optional[Exception] = None,
     ) -> None:
         self._response = response
+        self._responses = list(responses) if responses is not None else None
         self._raise_error = raise_error
         self._call_count = 0
 
@@ -191,6 +175,9 @@ class FakeLLMClient:
         self._call_count += 1
         if self._raise_error is not None:
             raise self._raise_error
+        if self._responses is not None:
+            idx = min(self._call_count - 1, len(self._responses) - 1)
+            return self._responses[idx]
         if self._response is None:
             raise ValueError(
                 "FakeLLMClient has no configured response and no error. "

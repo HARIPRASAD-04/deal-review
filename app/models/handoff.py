@@ -174,6 +174,31 @@ class Handoff(BaseModel):
             "over embedding large objects here."
         ),
     )
+    # ── Module 5 additions — feedback loop metadata ────────────────────────────
+    rule_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "POLICY-NNN IDs of the policy rules that triggered this handoff. "
+            "Used by the router to perform targeted rule re-evaluation after "
+            "clarification, rather than re-running the entire compliance pass."
+        ),
+    )
+    requested_term_names: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Term names the recipient agent should focus on in its clarification "
+            "pass.  Allows targeted extraction rather than a full re-run."
+        ),
+    )
+    clarification_attempt: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Which clarification attempt this handoff represents (0-indexed). "
+            "Used for loop-prevention: if this equals max_clarification_attempts, "
+            "the Orchestrator escalates to human rather than re-queueing."
+        ),
+    )
     status: HandoffStatus = Field(
         default=HandoffStatus.PENDING,
         description="Current lifecycle state of this handoff.",

@@ -1,0 +1,113 @@
+MODULE 5 MILESTONE — AGENT COMMUNICATION, HANDOFF ROUTING & FEEDBACK LOOP
+========================================================================
+Date completed : 2026-09-16
+Total tests    : 463 passed, 0 failed, 0 skipped
+(Previous: 450 | New this module: 13 new tests across 4 test files)
+
+────────────────────────────────────────────
+FILES CREATED
+────────────────────────────────────────────
+app/agents/orchestrator/router.py
+  - HandoffRouter class: coordinator for inter-agent handoff routing
+  - Loop prevention: tracks clarification_attempts per rule_id (max_attempts = 1)
+  - Direct human escalation (escalations list) when no evidence snippets exist or limit reached
+  - Dispatches targeted re-extraction to TermExtractionAgent.clarify()
+  - Dispatches compliance re-check to ComplianceReviewAgent.review_rule()
+  - Emits typed AuditEvents for routing lifecycle
+
+scripts/demo_feedback_loop.py
+  - Full demo of Compliance -> Extraction feedback loop and targeted re-extraction
+
+tests/unit/test_compliance_handoff_generation.py
+tests/unit/test_term_clarification.py
+tests/unit/test_handoff_router.py
+tests/integration/test_feedback_loop.py
+
+milestones/module_5_milestone.txt (this file)
+
+────────────────────────────────────────────
+FILES MODIFIED
+────────────────────────────────────────────
+app/models/handoff.py
+  + rule_ids: list[str]
+  + requested_term_names: list[str]
+  + clarification_attempt: int
+
+app/models/audit.py
+  + HANDOFF_ROUTING_STARTED
+  + HANDOFF_ROUTING_COMPLETED
+  + CLARIFICATION_STARTED
+  + CLARIFICATION_COMPLETED
+  + CLARIFICATION_FAILED
+  + COMPLIANCE_RECHECK_STARTED
+  + COMPLIANCE_RECHECK_COMPLETED
+  + LOOP_LIMIT_REACHED
+
+app/models/state.py
+  + clarification_attempts: dict[str, int]
+
+app/agents/extraction/prompts.py
+  + CLARIFICATION_SYSTEM_PROMPT
+
+app/agents/extraction/term_extraction.py
+  + clarify() method for targeted re-extraction
+
+app/agents/compliance/compliance_review.py
+  + review_rule() for single-rule re-evaluation
+  + generate_clarification_handoffs() for INSUFFICIENT_EVIDENCE rules
+
+app/agents/orchestrator/__init__.py
+  + exports HandoffRouter
+
+app/orchestration/graph.py
+  + registered NODE_HANDOFF_ROUTER ("route_handoffs")
+  + make_compliance_node() generates clarification handoffs
+  + build_graph() graph sequence:
+    initialize_run -> ingest_document -> extract_terms -> review_compliance -> route_handoffs -> END
+
+────────────────────────────────────────────
+FEEDBACK LOOP ARCHITECTURE
+────────────────────────────────────────────
+1. Initial Extraction:
+   TermExtractionAgent extracts initial terms from evidence registry.
+
+2. Compliance Review:
+   ComplianceReviewAgent evaluates policy rules. If a rule produces INSUFFICIENT_EVIDENCE,
+   generate_clarification_handoffs() creates a Handoff (CLARIFICATION_REQUIRED)
+   directed to term_extraction.
+
+3. Handoff Router:
+   HandoffRouter inspects pending_handoffs.
+   - If clarification_attempts[rule_id] >= max_attempts:
+     Resolves handoff with escalation notes, creates human escalation item,
+     emits LOOP_LIMIT_REACHED audit event.
+   - Otherwise:
+     Dispatches to TermExtractionAgent.clarify() for targeted re-extraction.
+     If new terms are found:
+       Updates state.extracted_terms
+       Dispatches to ComplianceReviewAgent.review_rule() for immediate re-check.
+       Updates state.compliance_results.
+
+────────────────────────────────────────────
+GRAPH LAYOUT (Module 5)
+────────────────────────────────────────────
+START
+  -> initialize_run       (orchestrator setup, audit RUN_STARTED)
+  -> ingest_document      (PDF -> EvidenceRegistry, audit DOCUMENT_INGESTION_*)
+  -> extract_terms        (LLM -> DealTerm[], audit TERM_EXTRACTION_*)
+  -> review_compliance    (deterministic -> ComplianceResult[], audit COMPLIANCE_REVIEW_*)
+  -> route_handoffs       (HandoffRouter -> targeted clarification + compliance re-check, audit HANDOFF_ROUTING_*)
+  -> END
+
+────────────────────────────────────────────
+DEFINITION OF DONE -- ALL CRITERIA MET
+────────────────────────────────────────────
+[x] Real, controlled agent-to-agent communication via Handoff model
+[x] Meaningful Compliance -> Extraction feedback loop implemented
+[x] HandoffRouter coordinates routing without super-agent bloat
+[x] Loop-prevention implemented (max_attempts counter per rule_id)
+[x] Human escalation triggered when loop limit is exceeded
+[x] All audit events recorded for routing and clarification lifecycle
+[x] All existing 450 tests remain green
+[x] New tests added for handoff generation, clarification, routing, and feedback loop
+[x] Demo script scripts/demo_feedback_loop.py executes successfully

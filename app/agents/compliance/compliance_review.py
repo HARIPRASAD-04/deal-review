@@ -144,6 +144,131 @@ class ComplianceReviewAgent:
         )
         return results
 
+    def review_rule(
+        self,
+        rule: PolicyRule,
+        extracted_terms: dict[str, DealTerm],
+        evidence_registry: dict[str, EvidenceSnippet],
+        comp_id: str,
+    ) -> ComplianceResult:
+        """Evaluate a single policy rule against extracted deal terms.
+
+        Args:
+            rule: The ``PolicyRule`` to evaluate.
+            extracted_terms: Dict of ``TERM-NNN → DealTerm``.
+            evidence_registry: Dict of ``EV-NNN → EvidenceSnippet``.
+            comp_id: Canonical ``COMP-NNN`` identifier for the result.
+
+        Returns:
+            A ``ComplianceResult`` for the single specified rule.
+        """
+        terms_by_name = self._build_name_index(extracted_terms)
+        return self._evaluate_rule(
+            comp_id=comp_id,
+            rule=rule,
+            terms_by_name=terms_by_name,
+        )
+
+    def generate_clarification_handoffs(
+        self,
+        results: list[ComplianceResult],
+        policy_rules: list[PolicyRule],
+        evidence_registry: Optional[dict[str, EvidenceSnippet]] = None,
+    ) -> list[Handoff]:
+        """Generate targeted handoffs for INSUFFICIENT_EVIDENCE results.
+
+        If the evidence registry contains snippets with keywords related to the
+        missing term, generates a CLARIFICATION_REQUIRED handoff to term_extraction.
+        If the evidence registry contains no trace of the term (or is empty),
+        generates an ESCALATION_REQUIRED handoff directly to human review.
+
+        Args:
+            results: List of evaluated ``ComplianceResult`` objects.
+            policy_rules: List of ``PolicyRule`` objects to resolve rule names.
+            evidence_registry: Optional dict of ``EV-NNN → EvidenceSnippet``.
+
+        Returns:
+            List of ``Handoff`` objects.
+        """
+        from app.models.handoff import Handoff, HandoffPriority, HandoffType
+
+        rules_by_id = {r.rule_id: r for r in policy_rules}
+        handoffs: list[Handoff] = []
+
+        for result in results:
+            if result.status == ComplianceStatus.INSUFFICIENT_EVIDENCE:
+                rule = rules_by_id.get(result.rule_id)
+                term_name = rule.name if rule else result.rule_id
+
+                has_evidence = (
+                    self._evidence_has_relevant_snippets(term_name, rule, evidence_registry)
+                    if evidence_registry is not None
+                    else True
+                )
+
+                if has_evidence:
+                    reason = (
+                        f"Compliance review for rule '{result.rule_id}' failed due to missing term '{term_name}'. "
+                        f"Matching keywords exist in evidence registry; targeted clarification re-extraction requested."
+                    )
+                    handoff = Handoff(
+                        source_agent=self.AGENT_NAME,
+                        target_agent="term_extraction",
+                        handoff_type=HandoffType.CLARIFICATION_REQUIRED,
+                        reason=reason,
+                        rule_ids=[result.rule_id],
+                        requested_term_names=[term_name],
+                        priority=HandoffPriority.HIGH,
+                    )
+                else:
+                    reason = (
+                        f"Compliance review for rule '{result.rule_id}' failed due to missing term '{term_name}'. "
+                        f"No supporting keywords found in evidence registry; escalated directly to human review."
+                    )
+                    handoff = Handoff(
+                        source_agent=self.AGENT_NAME,
+                        target_agent="human",
+                        handoff_type=HandoffType.ESCALATION_REQUIRED,
+                        reason=reason,
+                        rule_ids=[result.rule_id],
+                        requested_term_names=[term_name],
+                        priority=HandoffPriority.HIGH,
+                    )
+
+                handoffs.append(handoff)
+
+        logger.info(
+            "[%s] Generated %d handoff(s) for INSUFFICIENT_EVIDENCE rules.",
+            self.AGENT_NAME,
+            len(handoffs),
+        )
+        return handoffs
+
+    @staticmethod
+    def _evidence_has_relevant_snippets(
+        term_name: str,
+        rule: Optional[PolicyRule],
+        evidence_registry: dict[str, EvidenceSnippet],
+    ) -> bool:
+        """Check if any snippet in the evidence registry contains keywords related to term_name."""
+        if not evidence_registry:
+            return False
+
+        import re
+
+        search_words = set(re.findall(r"\w+", term_name.lower()))
+        if rule and rule.description:
+            desc_words = set(re.findall(r"\w+", rule.description.lower()))
+            stop_words = {"must", "than", "equal", "shall", "with", "from", "that", "this", "have", "more", "less", "rule"}
+            search_words.update(w for w in desc_words if len(w) > 3 and w not in stop_words)
+
+        for snippet in evidence_registry.values():
+            snippet_text_lower = snippet.text.lower()
+            if any(w in snippet_text_lower for w in search_words):
+                return True
+
+        return False
+
     # ── Internal helpers ───────────────────────────────────────────────────────
 
     @staticmethod

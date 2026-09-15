@@ -137,6 +137,67 @@ class TermExtractionAgent:
         )
         return accepted, rejections
 
+    def clarify(
+        self,
+        evidence_registry: dict[str, EvidenceSnippet],
+        requested_term_names: list[str],
+        reason: Optional[str] = None,
+        start_counter: int = 1,
+    ) -> tuple[list[DealTerm], list[str]]:
+        """Perform targeted re-extraction for specified terms based on clarification feedback.
+
+        Args:
+            evidence_registry: Evidence snippets to search.
+            requested_term_names: List of term names specifically requested (e.g. ['interest_rate']).
+            reason: Optional explanation of why clarification was requested.
+            start_counter: Starting integer index for TERM-NNN assignment.
+
+        Returns:
+            A tuple of (accepted_terms, rejection_reasons).
+        """
+        if not evidence_registry:
+            logger.info("[%s.clarify] Evidence registry is empty.", self.AGENT_NAME)
+            return [], []
+
+        from app.agents.extraction.prompts import CLARIFICATION_SYSTEM_PROMPT
+
+        snippets = list(evidence_registry.values())
+        serialized_evidence = serialize_evidence(snippets)
+
+        terms_str = ", ".join(requested_term_names) if requested_term_names else "unspecified terms"
+        user_prompt = (
+            f"TARGETED CLARIFICATION REQUEST\n"
+            f"Requested Term Name(s): {terms_str}\n"
+            f"Reason / Context: {reason or 'Missing or incomplete term requested by compliance review.'}\n\n"
+            f"EVIDENCE SNIPPETS:\n"
+            f"{serialized_evidence}"
+        )
+
+        raw_output: ExtractionOutput = self._llm.get_structured_completion(
+            system_prompt=CLARIFICATION_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            response_schema=ExtractionOutput,
+        )
+
+        accepted, rejections = self._process_candidates(
+            candidates=raw_output.terms,
+            evidence_registry=evidence_registry,
+        )
+
+        # Adjust term_ids to start from start_counter
+        renamed: list[DealTerm] = []
+        for i, term in enumerate(accepted):
+            new_id = f"TERM-{start_counter + i:03d}"
+            renamed.append(term.model_copy(update={"term_id": new_id}))
+
+        logger.info(
+            "[%s.clarify] Clarification accepted %d term(s) (starting at TERM-%03d).",
+            self.AGENT_NAME,
+            len(renamed),
+            start_counter,
+        )
+        return renamed, rejections
+
     # ── Internal helpers ───────────────────────────────────────────────────────
 
     def _process_candidates(

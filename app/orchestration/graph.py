@@ -66,9 +66,9 @@ logger = logging.getLogger(__name__)
 NODE_INITIALIZE = "initialize_run"
 NODE_INGEST_DOCUMENT = "ingest_document"
 NODE_TERM_EXTRACTION = "extract_terms"
-NODE_COMPLIANCE_REVIEW = "compliance_review"      # Placeholder — Module 4
-NODE_RISK_ANALYSIS = "risk_analysis"              # Placeholder — Module 5
-NODE_HANDOFF_ROUTER = "handoff_router"            # Placeholder — Module 6
+NODE_COMPLIANCE_REVIEW = "compliance_review"
+NODE_HANDOFF_ROUTER = "route_handoffs"
+NODE_RISK_ANALYSIS = "risk_analysis"              # Placeholder — Module 6
 NODE_HUMAN_ESCALATION = "human_escalation"        # Placeholder — Module 6
 NODE_REPORT_ASSEMBLY = "report_assembly"          # Placeholder — Module 7
 
@@ -534,8 +534,28 @@ def make_compliance_node():
             state.run_id, pass_count, fail_count, needs_review_count, insufficient_count,
         )
 
+        # ── Generate clarification handoffs for INSUFFICIENT_EVIDENCE rules ──
+        clarification_handoffs = agent.generate_clarification_handoffs(
+            results=results,
+            policy_rules=state.policy_rules,
+            evidence_registry=state.evidence_registry,
+        )
+        updated_pending = [*state.pending_handoffs, *clarification_handoffs]
+
+        for h in clarification_handoffs:
+            audit_events.append(
+                make_audit_event(
+                    run_id=state.run_id,
+                    event_type=AuditEventType.HANDOFF_CREATED,
+                    agent_name=AGENT_COMPLIANCE,
+                    message=f"Created clarification handoff '{h.handoff_id}' for rule {h.rule_ids}.",
+                    metadata={"handoff_id": h.handoff_id, "rule_ids": h.rule_ids},
+                )
+            )
+
         return {
             "compliance_results": compliance_results,
+            "pending_handoffs": updated_pending,
             "audit_events": [*audit_events, completed_event],
             "agent_statuses": updated_statuses,
         }
@@ -543,17 +563,46 @@ def make_compliance_node():
     return review_compliance
 
 
+def make_route_handoffs_node(llm_client: Optional[LLMClient] = None):
+    """Factory that creates a ``route_handoffs`` LangGraph node.
+
+    Args:
+        llm_client: Optional LLM client passed to HandoffRouter for targeted clarification.
+
+    Returns:
+        A node function ``route_handoffs(state: WorkflowState) -> dict``.
+    """
+    def route_handoffs(state: WorkflowState) -> dict[str, Any]:
+        """Route pending handoffs in state via HandoffRouter."""
+        from app.agents.orchestrator.router import HandoffRouter
+
+        logger.info("[%s] Routing pending handoffs.", state.run_id)
+        router = HandoffRouter()
+        new_state = router.route(state, llm_client=llm_client, max_attempts=1)
+
+        return {
+            "pending_handoffs": new_state.pending_handoffs,
+            "resolved_handoffs": new_state.resolved_handoffs,
+            "extracted_terms": new_state.extracted_terms,
+            "compliance_results": new_state.compliance_results,
+            "clarification_attempts": new_state.clarification_attempts,
+            "escalations": new_state.escalations,
+            "audit_events": new_state.audit_events,
+        }
+
+    return route_handoffs
+
+
 def build_graph(llm_client: Optional[LLMClient] = None):
     """Build and return the compiled LangGraph StateGraph.
 
-    After Module 4 the graph is:
-        START -> initialize_run -> ingest_document -> extract_terms -> review_compliance -> END
+    After Module 5 the graph is:
+        START -> initialize_run -> ingest_document -> extract_terms -> review_compliance -> route_handoffs -> END
 
     Args:
-        llm_client: Optional LLM client injected into the ``extract_terms``
-                    node.  When ``None`` (the default), the node exits
-                    gracefully without calling any LLM — safe for tests that
-                    only exercise Module 1 / Module 2 behaviour.
+        llm_client: Optional LLM client injected into ``extract_terms`` and
+                    ``route_handoffs`` nodes.  When ``None`` (the default), nodes exit
+                    gracefully without calling any LLM.
 
     Returns:
         A compiled LangGraph StateGraph ready for invocation.
@@ -565,19 +614,15 @@ def build_graph(llm_client: Optional[LLMClient] = None):
     graph.add_node(NODE_INGEST_DOCUMENT, ingest_document)
     graph.add_node(NODE_TERM_EXTRACTION, make_extract_terms_node(llm_client))
     graph.add_node(NODE_COMPLIANCE_REVIEW, make_compliance_node())
-
-    # ── Future nodes (commented — to be registered in later modules) ──────────
-    # graph.add_node(NODE_RISK_ANALYSIS,     risk_analysis_node)
-    # graph.add_node(NODE_HANDOFF_ROUTER,    handoff_router_node)
-    # graph.add_node(NODE_HUMAN_ESCALATION,  human_escalation_node)
-    # graph.add_node(NODE_REPORT_ASSEMBLY,   report_assembly_node)
+    graph.add_node(NODE_HANDOFF_ROUTER, make_route_handoffs_node(llm_client))
 
     # ── Edges ─────────────────────────────────────────────────────────────────
     graph.add_edge(START, NODE_INITIALIZE)
     graph.add_edge(NODE_INITIALIZE, NODE_INGEST_DOCUMENT)
     graph.add_edge(NODE_INGEST_DOCUMENT, NODE_TERM_EXTRACTION)
     graph.add_edge(NODE_TERM_EXTRACTION, NODE_COMPLIANCE_REVIEW)
-    graph.add_edge(NODE_COMPLIANCE_REVIEW, END)
+    graph.add_edge(NODE_COMPLIANCE_REVIEW, NODE_HANDOFF_ROUTER)
+    graph.add_edge(NODE_HANDOFF_ROUTER, END)
 
     return graph.compile()
 
