@@ -1,0 +1,55 @@
+{
+  "policy_id": "CREDIT-POLICY-V1",
+  "version": "1.0",
+  "description": "Synthetic credit compliance policy for Module 1 testing.",
+  "rules": [
+    {
+      "rule_id": "POLICY-001",
+      "name": "maximum_facility_amount",
+      "description": "The total loan facility amount must not exceed INR 8 crore for standard term loans.",
+      "category": "financial",
+      "operator": "<=",
+      "threshold": "INR 8 crore",
+      "applicability": "term_loan",
+      "reference": "Credit Policy Manual — Section 3.2",
+      "severity": "high",
+      "is_mandatory": true
+    },
+    {
+      "rule_id": "POLICY-002",
+      "name": "minimum_interest_rate",
+      "description": "The interest rate on any new loan must be at least 9% per annum.",
+      "category": "financial",
+      "operator": ">=",
+      "threshold": "9.0% per annum",
+      "applicability": "term_loan",
+      "reference": "Credit Policy Manual — Section 4.1",
+      "severity": "high",
+      "is_mandatory": true
+    },
+    {
+      "rule_id": "POLICY-003",
+      "name": "minimum_dscr",
+      "description": "The borrower must maintain a minimum Debt Service Coverage Ratio (DSCR) of 1.25.",
+      "category": "credit",
+      "operator": ">=",
+      "threshold": "1.25",
+      "applicability": "term_loan",
+      "reference": "Credit Policy Manual — Section 5.3",
+      "severity": "critical",
+      "is_mandatory": true
+    },
+    {
+      "rule_id": "POLICY-004",
+      "name": "collateral_required",
+      "description": "All term loans must be secured by tangible collateral valued at a minimum of 1.5x the facility amount.",
+      "category": "collateral",
+      "operator": "exists",
+      "threshold": "1.5x facility_amount",
+      "applicability": "term_loan",
+      "reference": "Credit Policy Manual — Section 6.1",
+      "severity": "critical",
+      "is_mandatory": true
+    }
+  ]
+}
