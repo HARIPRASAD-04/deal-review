@@ -1,1 +1,5 @@
-"""Term Extraction Agent — to be implemented in Module 2."""
+"""Term extraction agent package."""
+
+from app.agents.extraction.term_extraction import TermExtractionAgent
+
+__all__ = ["TermExtractionAgent"]

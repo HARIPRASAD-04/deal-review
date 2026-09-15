@@ -1,0 +1,166 @@
+================================================================================
+MODULE 3 MILESTONE — Term Extraction Agent
+Multi-Agent Deal Review Pipeline
+================================================================================
+
+STATUS: COMPLETE
+
+--------------------------------------------------------------------------------
+WHAT WAS BUILT
+--------------------------------------------------------------------------------
+
+1. LLM Abstraction Layer (app/llm/)
+   - LLMClient: structural Protocol (runtime_checkable) — any object
+     implementing get_structured_completion satisfies it
+   - GoogleLLMClient: real provider backed by langchain-google-genai;
+     uses with_structured_output for Pydantic-typed JSON responses;
+     temperature=0 for deterministic extraction
+   - FakeLLMClient: test double — configurable response or error; tracks
+     call_count; never makes network calls
+   - get_llm_client(settings): factory — currently routes "google" only;
+     raises ValueError for unknown providers; designed for future extension
+
+2. LLM-Facing Schema (app/llm/schemas.py)
+   - ExtractedTermSchema: what the LLM returns (name, value,
+     normalized_value, category, confidence, evidence_ids, notes)
+   - ExtractionOutput: top-level structured response (list[ExtractedTermSchema])
+   - Intentionally SEPARATE from DealTerm — the LLM schema is a
+     prompt/response contract; DealTerm is the application domain model
+
+3. Extraction Prompts (app/agents/extraction/prompts.py)
+   - SYSTEM_PROMPT: grounds the agent in its role as a pure extractor
+     - Explicit prohibition on compliance analysis
+     - Explicit prohibition on risk analysis
+     - Explicit instruction to preserve qualifiers exactly
+     - Explicit instruction to represent conflicting/ambiguous values
+     - Explicit ban on inventing evidence IDs
+   - serialize_evidence(): converts EvidenceSnippet objects into a
+     structured text block; format: [EV-NNN] Page N | Section: ...
+
+4. Term Extraction Agent (app/agents/extraction/term_extraction.py)
+   - TermExtractionAgent.extract(evidence_registry) → (terms, rejections)
+   - Guards:
+     - Empty registry → ([], []) without calling LLM
+     - Hallucinated / absent EV IDs → term REJECTED, reason recorded
+     - Rejection reasons are explicit, non-empty human-readable strings
+   - Merging:
+     - Same name + same value → one term with all EV IDs combined
+     - Same name + different values → both terms, both AMBIGUOUS
+   - ID assignment: TERM-001, TERM-002, ... (sequential, deterministic)
+   - LLM client is INJECTED — agent is fully testable with FakeLLMClient
+
+5. LangGraph Node (app/orchestration/graph.py)
+   - make_extract_terms_node(llm_client): factory — captures client via
+     closure; node has plain (state) -> dict signature for LangGraph
+   - build_graph(llm_client=None): module-level graph safe for all existing
+     tests (llm_client=None → graceful skip + TERM_EXTRACTION_FAILED)
+   - Graph: START → initialize_run → ingest_document → extract_terms → END
+   - Audit events:
+     - TERM_EXTRACTION_STARTED
+     - GENERIC [WARNING] for each rejected candidate (hallucinated EV)
+     - TERM_EXTRACTION_COMPLETED (with term_count, rejection_count)
+     - TERM_EXTRACTION_FAILED for LLM/config errors
+
+6. Audit Events (app/models/audit.py)
+   - Added: TERM_EXTRACTION_STARTED, TERM_EXTRACTION_COMPLETED,
+            TERM_EXTRACTION_FAILED
+
+--------------------------------------------------------------------------------
+FILES CREATED
+--------------------------------------------------------------------------------
+
+app/llm/__init__.py
+app/llm/schemas.py
+app/llm/client.py
+app/agents/extraction/prompts.py
+app/agents/extraction/term_extraction.py
+tests/unit/test_llm_client.py
+tests/unit/test_prompts.py
+tests/unit/test_term_extraction_agent.py
+tests/integration/test_term_extraction_pipeline.py
+scripts/demo_term_extraction.py
+milestones/module_3_milestone.txt
+
+FILES MODIFIED
+--------------
+
+app/models/audit.py        — added 3 audit event types
+app/agents/extraction/__init__.py  — exports TermExtractionAgent
+app/orchestration/graph.py — added extract_terms node, build_graph(llm_client)
+pyproject.toml             — added llm-google optional extra
+.env                       — API key + MODEL_PROVIDER=google, MODEL_NAME=gemini-2.5-flash
+
+--------------------------------------------------------------------------------
+TEST RESULTS
+--------------------------------------------------------------------------------
+
+Total tests: 344 passed, 0 failed
+Previous baseline: 258
+New tests added: 86 (unit + integration)
+
+Test files:
+  tests/unit/test_llm_client.py              10 tests
+  tests/unit/test_prompts.py                 15 tests
+  tests/unit/test_term_extraction_agent.py   44 tests
+  tests/integration/test_term_extraction_pipeline.py  17 tests
+
+Key behaviors tested:
+  [x] Successful extraction (single + multiple terms)
+  [x] Valid evidence grounding verification
+  [x] Hallucinated EV-999 rejected + reason recorded (not silently dropped)
+  [x] Invalid (absent) EV ID rejected
+  [x] Empty evidence registry → ([], []) without LLM call
+  [x] Zero terms from LLM → valid result, not a failure
+  [x] Malformed confidence (string, >1, <0) → Pydantic ValidationError
+  [x] Invalid category → Pydantic ValidationError
+  [x] Missing name/value → Pydantic ValidationError
+  [x] Empty evidence_ids in schema → Pydantic ValidationError
+  [x] Qualifier preservation: "subject to", "approximately", "up to",
+      "unless", "not less than"
+  [x] Multiple evidence IDs on one term
+  [x] Deterministic TERM-NNN ID assignment
+  [x] Conflicting values → both terms kept, both AMBIGUOUS
+  [x] Conflicting values NOT silently collapsed
+  [x] Duplicate same-value terms → merged, evidence IDs combined
+  [x] LLM API failure → propagated correctly
+  [x] FakeLLMClient call_count tracking
+  [x] Real PDF + FakeLLMClient integration
+  [x] Full traceability: DealTerm → EV IDs → EvidenceSnippet → page + text
+  [x] TERM_EXTRACTION_STARTED / COMPLETED / FAILED audit events
+  [x] Hallucination → GENERIC diagnostic audit event in state
+  [x] Zero terms → COMPLETED (not FAILED) audit event
+  [x] No LLM configured → TERM_EXTRACTION_FAILED in state
+
+--------------------------------------------------------------------------------
+DESIGN PRINCIPLES PRESERVED
+--------------------------------------------------------------------------------
+
+1. LLM reasons over EvidenceRegistry, NOT the PDF
+2. EvidenceSnippet IDs are immutable; hallucinated IDs are rejected
+3. LLMClient is injected — agents are independently testable
+4. One LLM call per document (no RAG, no per-snippet calls)
+5. Exactly 4 agents: orchestrator, term_extraction, compliance, risk_summary
+6. Confidence stored as signal only — no threshold-based auto-rejection
+7. Conflicting evidence preserved (AMBIGUOUS), never silently resolved
+8. Prompt explicitly forbids compliance and risk reasoning
+9. build_graph(llm_client=None) preserves all 258 existing tests
+
+--------------------------------------------------------------------------------
+ARCHITECTURE BOUNDARY
+--------------------------------------------------------------------------------
+
+  Term Extraction Agent = "What does the document say?"
+  Compliance Agent      = "Does it comply with policy?"      (Module 4)
+  Risk/Summary Agent    = "What matters, what could go wrong?" (Module 5)
+
+--------------------------------------------------------------------------------
+NEXT MODULE
+--------------------------------------------------------------------------------
+
+Module 4 — Compliance Review Agent
+  - Takes extracted_terms from WorkflowState
+  - Evaluates each DealTerm against policy_rules
+  - Produces ComplianceResult objects (PASS / FAIL / EXCEPTION / WAIVED)
+  - References EvidenceSnippet for audit trail
+
+================================================================================
