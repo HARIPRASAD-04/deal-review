@@ -642,8 +642,8 @@ class TestLLMSummarySchemaRegression:
         assert final_state.executive_summary == expected_summary
         assert final_state.run_status == WorkflowRunStatus.COMPLETED
 
-    def test_final_report_remains_untouched(self):
-        """state.final_report must remain None after Module 6 completes."""
+    def test_final_report_populated_by_report_assembly(self):
+        """state.final_report is populated by report_assembly after pipeline completes."""
         from app.models.state import WorkflowState
         from app.orchestration.graph import build_graph
 
@@ -656,10 +656,10 @@ class TestLLMSummarySchemaRegression:
         result = graph.invoke(initial_state)
         final_state = WorkflowState(**result) if isinstance(result, dict) else result
 
-        assert final_state.final_report is None
+        assert final_state.final_report is not None
 
     def test_existing_fallback_still_works_on_llm_exception(self):
-        """When LLM raises exception, pipeline does not crash, summary falls back, final_report is None."""
+        """When LLM raises exception, pipeline does not crash, summary falls back, final_report is set."""
         from app.models.state import WorkflowState
         from app.orchestration.graph import build_graph
 
@@ -673,5 +673,5 @@ class TestLLMSummarySchemaRegression:
         assert final_state.executive_summary is not None
         assert isinstance(final_state.executive_summary, str)
         assert len(final_state.executive_summary) > 0
-        assert final_state.final_report is None
+        assert final_state.final_report is not None
 

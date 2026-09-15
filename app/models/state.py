@@ -320,7 +320,14 @@ class WorkflowState(BaseModel):
     # ── Output ────────────────────────────────────────────────────────────────
     final_report: Optional[str] = Field(
         default=None,
-        description="The assembled final report (set when the run completes).",
+        description=(
+            "The assembled final report, serialised as a JSON string. "
+            "Set by the OrchestratorAgent's ``assemble_report`` LangGraph node "
+            "(Module 7) after all four agents have completed. "
+            "Deserialise with ``FinalDealReviewReport.model_validate_json()`` "
+            "from ``app.models.report``. "
+            "None until the report_assembly node has run."
+        ),
     )
 
     # ── Metadata ──────────────────────────────────────────────────────────────

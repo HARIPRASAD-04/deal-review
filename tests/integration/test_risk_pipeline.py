@@ -149,16 +149,15 @@ class TestRiskPipelineIntegration:
         final = _run_graph(state)
         assert final.run_status == WorkflowRunStatus.COMPLETED
 
-    def test_executive_summary_set_not_final_report(self):
-        """executive_summary is populated; final_report remains None (Module 7 responsibility)."""
+    def test_executive_summary_and_final_report_set(self):
+        """executive_summary is populated and final_report is set by report_assembly (Module 7)."""
         state = WorkflowState(document_id="DEAL-001")
         final = _run_graph(state)
 
         assert final.executive_summary is not None
         assert isinstance(final.executive_summary, str)
         assert len(final.executive_summary) > 0
-        # final_report must remain None — it is Module 7's output
-        assert final.final_report is None
+        assert final.final_report is not None
 
     def test_evidence_ids_in_risk_findings_are_valid(self):
         """All evidence_ids in risk findings must exist in state.evidence_registry."""

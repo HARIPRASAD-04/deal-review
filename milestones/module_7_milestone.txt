@@ -1,0 +1,70 @@
+MODULE 7 MILESTONE — ORCHESTRATOR AGENT, END-TO-END WORKFLOW & FINAL REPORT
+========================================================================
+Date completed : 2026-09-16
+Total tests    : 531 passed, 0 failed, 0 skipped
+(Previous: 509 | New this module: 22 new unit & integration tests)
+
+────────────────────────────────────────────
+FILES CREATED
+────────────────────────────────────────────
+app/models/report.py
+  - ReviewStatus enum (COMPLETED, COMPLETED_WITH_HUMAN_REVIEW, FAILED)
+  - ComplianceSummary (aggregated rule counts and overall status)
+  - FinalDealReviewReport (structured, typed, auditable final deliverable)
+
+app/agents/orchestrator/agent.py
+  - OrchestratorAgent (4th core agent, central workflow authority)
+  - Subcomponent: HandoffRouter (owns workflow routing; delegates per-handoff logic to router)
+  - Six named responsibilities:
+    1. inspect_state() — snapshot summary of workflow state
+    2. check_dependencies() — prerequisite validation
+    3. should_retry() — retry policy eligibility
+    4. route_handoffs() — handoff routing delegation
+    5. collect_escalations() — unified escalation aggregation
+    6. assemble_report() — FinalDealReviewReport assembly
+
+scripts/demo_orchestrator.py
+  - End-to-end 4-agent demo script with formatted report output
+
+tests/unit/test_report.py
+  - Unit tests for FinalDealReviewReport, ComplianceSummary, ReviewStatus
+
+tests/unit/test_orchestrator_agent.py
+  - Unit tests for OrchestratorAgent methods
+
+tests/unit/test_report_assembly_node.py
+  - Unit tests for report_assembly LangGraph node factory and execution
+
+tests/integration/test_orchestrator_pipeline.py
+  - End-to-end integration tests for full 4-agent pipeline producing FinalDealReviewReport
+
+milestones/module_7_milestone.txt (this file)
+
+────────────────────────────────────────────
+FILES MODIFIED
+────────────────────────────────────────────
+app/agents/orchestrator/__init__.py
+  + Exports OrchestratorAgent alongside HandoffRouter
+
+app/models/audit.py
+  + REPORT_ASSEMBLY_STARTED
+  + REPORT_ASSEMBLY_COMPLETED
+  + REPORT_ASSEMBLY_FAILED
+
+app/models/state.py
+  + Updated final_report docstring (serialised JSON FinalDealReviewReport)
+
+app/orchestration/graph.py
+  + make_route_handoffs_node() delegates via OrchestratorAgent.route_handoffs()
+  + make_risk_summary_node() exit run_status set to GENERATING_REPORT
+  + make_report_assembly_node() factory added
+  + Graph extended: START -> initialize_run -> ingest_document -> extract_terms -> review_compliance -> route_handoffs -> risk_summary -> report_assembly -> END
+
+────────────────────────────────────────────
+KEY VERIFICATIONS
+────────────────────────────────────────────
+1. Exactly Four Core Agents: Term Extraction, Compliance Review, Risk & Summary, Orchestrator. No 5th agent.
+2. Routing Ownership: OrchestratorAgent owns routing as a workflow responsibility; HandoffRouter is an internal subcomponent.
+3. No Autonomous Deal Approval: ReviewStatus reflects pipeline completion quality (COMPLETED / COMPLETED_WITH_HUMAN_REVIEW / FAILED), not loan approval/rejection.
+4. Deterministic Assembly: OrchestratorAgent operates 100% deterministically without an LLM.
+5. Full Test Coverage: 531 tests passing cleanly with zero failures.

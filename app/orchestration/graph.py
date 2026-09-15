@@ -1,19 +1,15 @@
-"""LangGraph orchestration graph — Module 6 update.
+"""LangGraph orchestration graph — Module 7 update.
 
-Graph layout after Module 6:
+Graph layout after Module 7:
 
     START -> initialize_run -> ingest_document -> extract_terms
-          -> review_compliance -> route_handoffs -> risk_summary -> END
+          -> review_compliance -> route_handoffs -> risk_summary
+          -> report_assembly -> END
 
-The risk_summary node is the fourth and final specialized agent.  It produces:
-* state.risk_findings       — prioritised list of RiskFinding objects
-* state.missing_information — unresolvable information gaps
-* state.follow_ups          — recommended next steps
-* state.executive_summary   — concise narrative for a credit officer
-
-Module 7 will add the Orchestrator-owned report assembly node between
-risk_summary and END, consuming all four agents' outputs to produce
-state.final_report (the FinalDealReviewReport).
+The report_assembly node is owned by OrchestratorAgent.  It aggregates
+outputs from all four pipeline agents (Term Extraction, Compliance Review,
+Risk & Summary, and Orchestrator) to produce state.final_report (a JSON-serialised
+FinalDealReviewReport).
 
 LLM CLIENT INJECTION
 --------------------
@@ -144,6 +140,13 @@ def ingest_document(state: WorkflowState) -> dict[str, Any]:
 
     # ── Guard: no path supplied ────────────────────────────────────────────────
     if not state.source_pdf_path:
+        if state.evidence_registry:
+            logger.info(
+                "[%s] source_pdf_path not set, but evidence_registry is already populated (%d snippet(s)). Ingestion skipped.",
+                state.run_id,
+                len(state.evidence_registry),
+            )
+            return {}
         msg = "source_pdf_path is not set in WorkflowState; cannot ingest document."
         logger.warning("[%s] %s", state.run_id, msg)
         failed_event = make_audit_event(
@@ -560,12 +563,12 @@ def make_route_handoffs_node(llm_client: Optional[LLMClient] = None):
         A node function ``route_handoffs(state: WorkflowState) -> dict``.
     """
     def route_handoffs(state: WorkflowState) -> dict[str, Any]:
-        """Route pending handoffs in state via HandoffRouter."""
-        from app.agents.orchestrator.router import HandoffRouter
+        """Route pending handoffs in state via OrchestratorAgent."""
+        from app.agents.orchestrator.agent import OrchestratorAgent
 
-        logger.info("[%s] Routing pending handoffs.", state.run_id)
-        router = HandoffRouter()
-        new_state = router.route(state, llm_client=llm_client, max_attempts=1)
+        logger.info("[%s] Routing pending handoffs via OrchestratorAgent.", state.run_id)
+        orchestrator = OrchestratorAgent()
+        new_state = orchestrator.route_handoffs(state, llm_client=llm_client, max_attempts=1)
 
         return {
             "pending_handoffs": new_state.pending_handoffs,
@@ -729,7 +732,7 @@ def make_risk_summary_node(llm_client: Optional[LLMClient] = None):
             "missing_information": missing_information,
             "follow_ups": follow_ups,
             "executive_summary": executive_summary,
-            "run_status": WorkflowRunStatus.COMPLETED,
+            "run_status": WorkflowRunStatus.GENERATING_REPORT,
             "agent_statuses": updated_statuses,
             "audit_events": [*audit_events, completed_event, summary_event],
         }
@@ -737,15 +740,99 @@ def make_risk_summary_node(llm_client: Optional[LLMClient] = None):
     return risk_summary
 
 
+def make_report_assembly_node():
+    """Factory that creates the ``report_assembly`` LangGraph node.
+
+    The report assembly phase is owned by OrchestratorAgent.  It reads all
+    agent outputs from state and constructs the FinalDealReviewReport,
+    serialising it to state.final_report as a JSON string.
+
+    Returns:
+        A node function ``report_assembly(state: WorkflowState) -> dict``.
+    """
+    def report_assembly(state: WorkflowState) -> dict[str, Any]:
+        """Assemble the final deal review report via OrchestratorAgent."""
+        from app.agents.orchestrator.agent import OrchestratorAgent
+
+        logger.info("[%s] Starting final report assembly.", state.run_id)
+
+        started_event = make_audit_event(
+            run_id=state.run_id,
+            event_type=AuditEventType.REPORT_ASSEMBLY_STARTED,
+            agent_name=AGENT_ORCHESTRATOR,
+            message="Final report assembly started.",
+        )
+        audit_events = [*state.audit_events, started_event]
+
+        orchestrator = OrchestratorAgent()
+
+        try:
+            report = orchestrator.assemble_report(state)
+            report_json = report.model_dump_json(indent=2)
+        except Exception as exc:  # noqa: BLE001
+            msg = f"Final report assembly failed: {exc}"
+            logger.error("[%s] %s", state.run_id, msg, exc_info=True)
+            failed_event = make_audit_event(
+                run_id=state.run_id,
+                event_type=AuditEventType.REPORT_ASSEMBLY_FAILED,
+                agent_name=AGENT_ORCHESTRATOR,
+                message=msg,
+                metadata={"error": str(exc)},
+            )
+            return {
+                "audit_events": [*audit_events, failed_event],
+                "errors": {**state.errors, "report_assembly": msg},
+                "run_status": WorkflowRunStatus.FAILED,
+            }
+
+        completed_event = make_audit_event(
+            run_id=state.run_id,
+            event_type=AuditEventType.REPORT_ASSEMBLY_COMPLETED,
+            agent_name=AGENT_ORCHESTRATOR,
+            message=(
+                f"Final report assembly completed. "
+                f"ReviewStatus: {report.review_status.value}. "
+                f"{len(report.risk_findings)} risk finding(s), "
+                f"{report.compliance_summary.total_rules} rule(s) evaluated."
+            ),
+            metadata={
+                "review_status": report.review_status.value,
+                "risk_findings_count": len(report.risk_findings),
+                "compliance_total": report.compliance_summary.total_rules,
+                "escalations_count": len(report.escalations),
+            },
+        )
+
+        updated_statuses = {
+            **state.agent_statuses,
+            AGENT_ORCHESTRATOR: state.agent_statuses.get(
+                AGENT_ORCHESTRATOR, AgentStatus(agent_name=AGENT_ORCHESTRATOR)
+            ).mark_completed(),
+        }
+
+        logger.info(
+            "[%s] Report assembly complete. Status: %s",
+            state.run_id,
+            report.review_status.value,
+        )
+
+        return {
+            "final_report": report_json,
+            "run_status": WorkflowRunStatus.COMPLETED,
+            "agent_statuses": updated_statuses,
+            "audit_events": [*audit_events, completed_event],
+        }
+
+    return report_assembly
+
+
 def build_graph(llm_client: Optional[LLMClient] = None):
     """Build and return the compiled LangGraph StateGraph.
 
-    After Module 6 the graph is:
+    After Module 7 the graph is:
         START -> initialize_run -> ingest_document -> extract_terms
-              -> review_compliance -> route_handoffs -> risk_summary -> END
-
-    Module 7 will extend this by adding the Orchestrator-owned report assembly
-    node between risk_summary and END.
+              -> review_compliance -> route_handoffs -> risk_summary
+              -> report_assembly -> END
 
     Args:
         llm_client: Optional LLM client injected into ``extract_terms``,
@@ -765,6 +852,7 @@ def build_graph(llm_client: Optional[LLMClient] = None):
     graph.add_node(NODE_COMPLIANCE_REVIEW, make_compliance_node())
     graph.add_node(NODE_HANDOFF_ROUTER, make_route_handoffs_node(llm_client))
     graph.add_node(NODE_RISK_SUMMARY, make_risk_summary_node(llm_client))
+    graph.add_node(NODE_REPORT_ASSEMBLY, make_report_assembly_node())
 
     # ── Edges ─────────────────────────────────────────────────────────────────
     graph.add_edge(START, NODE_INITIALIZE)
@@ -773,7 +861,8 @@ def build_graph(llm_client: Optional[LLMClient] = None):
     graph.add_edge(NODE_TERM_EXTRACTION, NODE_COMPLIANCE_REVIEW)
     graph.add_edge(NODE_COMPLIANCE_REVIEW, NODE_HANDOFF_ROUTER)
     graph.add_edge(NODE_HANDOFF_ROUTER, NODE_RISK_SUMMARY)
-    graph.add_edge(NODE_RISK_SUMMARY, END)
+    graph.add_edge(NODE_RISK_SUMMARY, NODE_REPORT_ASSEMBLY)
+    graph.add_edge(NODE_REPORT_ASSEMBLY, END)
 
     return graph.compile()
 

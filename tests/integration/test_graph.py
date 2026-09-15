@@ -77,13 +77,13 @@ class TestGraphExecution:
         assert AGENT_TERM_EXTRACTION in final_state.agent_statuses
         assert AGENT_COMPLIANCE in final_state.agent_statuses
 
-    def test_orchestrator_status_is_running_after_init(self):
+    def test_orchestrator_status_is_completed_after_full_run(self):
         initial_state = self._make_initial_state()
         result = deal_review_graph.invoke(initial_state)
         final_state = WorkflowState(**result) if isinstance(result, dict) else result
         orchestrator_status = final_state.agent_statuses.get(AGENT_ORCHESTRATOR)
         assert orchestrator_status is not None
-        assert orchestrator_status.status == AgentStatusEnum.RUNNING
+        assert orchestrator_status.status == AgentStatusEnum.COMPLETED
 
     def test_document_id_preserved(self):
         """The document_id must survive the graph execution unchanged."""
