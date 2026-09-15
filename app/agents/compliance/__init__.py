@@ -1,1 +1,5 @@
-"""Compliance Review Agent — to be implemented in Module 3."""
+"""Compliance Review Agent package."""
+
+from app.agents.compliance.compliance_review import ComplianceReviewAgent
+
+__all__ = ["ComplianceReviewAgent"]
