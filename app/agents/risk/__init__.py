@@ -1,1 +1,5 @@
-"""Risk & Summary Agent — to be implemented in Module 4."""
+"""Risk & Summary Agent — Module 6."""
+
+from app.agents.risk.risk_summary import RiskSummaryAgent
+
+__all__ = ["RiskSummaryAgent"]

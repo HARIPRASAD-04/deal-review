@@ -178,12 +178,12 @@ class FakeLLMClient:
         if self._responses is not None:
             idx = min(self._call_count - 1, len(self._responses) - 1)
             return self._responses[idx]
-        if self._response is None:
-            raise ValueError(
-                "FakeLLMClient has no configured response and no error. "
-                "Pass response= or raise_error= when constructing FakeLLMClient."
-            )
-        return self._response
+        if self._response is not None:
+            return self._response
+        raise ValueError(
+            "FakeLLMClient has no configured response and no error. "
+            "Pass response= or raise_error= when constructing FakeLLMClient."
+        )
 
 
 # ── Factory ───────────────────────────────────────────────────────────────────

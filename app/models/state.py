@@ -186,6 +186,11 @@ class WorkflowState(BaseModel):
         extracted_terms:     All extracted deal terms indexed by TERM-NNN.
         compliance_results:  All compliance decisions indexed by COMP-NNN.
         risk_findings:       Prioritised list of risk findings.
+        missing_information: Plain-text list of unresolvable gaps and ambiguities
+                             (populated by Risk & Summary Agent).
+        follow_ups:          Recommended next steps from the Risk & Summary Agent.
+        executive_summary:   Narrative executive summary (Risk & Summary Agent output).
+                             Consumed by Module 7 when assembling the final report.
         pending_handoffs:    Handoffs awaiting Orchestrator routing.
         resolved_handoffs:   Handoffs that have been resolved or rejected.
         escalations:         Human-escalation items with context.
@@ -193,7 +198,7 @@ class WorkflowState(BaseModel):
         audit_events:        Ordered, immutable audit log.
         errors:              Unrecoverable errors keyed by agent name.
         retry_counts:        Per-agent retry counter.
-        final_report:        The assembled final report (set when completed).
+        final_report:        The assembled final report (set by Module 7 Orchestrator).
         created_at:          UTC timestamp when this run was created.
         updated_at:          UTC timestamp of the last state update.
     """
@@ -249,6 +254,31 @@ class WorkflowState(BaseModel):
     risk_findings: list[RiskFinding] = Field(
         default_factory=list,
         description="Prioritised list of identified risk findings.",
+    )
+
+    # ── Risk & Summary Agent outputs ───────────────────────────────────────────
+    missing_information: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Plain-text list of unresolvable information gaps and ambiguities "
+            "identified by the Risk & Summary Agent. "
+            "Consumed by Module 7 when assembling the final report."
+        ),
+    )
+    follow_ups: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Recommended next steps produced by the Risk & Summary Agent, "
+            "keyed to specific risk findings and ordered by urgency."
+        ),
+    )
+    executive_summary: Optional[str] = Field(
+        default=None,
+        description=(
+            "Concise narrative executive summary produced by the Risk & Summary Agent. "
+            "Consumed by Module 7 when assembling the FinalDealReviewReport. "
+            "Not the same as final_report, which is Module 7's assembled output."
+        ),
     )
 
     # ── Handoffs & Escalations ────────────────────────────────────────────────

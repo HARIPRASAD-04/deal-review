@@ -1,40 +1,27 @@
-"""LangGraph orchestration graph — Module 4 update.
+"""LangGraph orchestration graph — Module 6 update.
 
-Graph layout after Module 4:
+Graph layout after Module 6:
 
-    START -> initialize_run -> ingest_document -> extract_terms -> review_compliance -> END
+    START -> initialize_run -> ingest_document -> extract_terms
+          -> review_compliance -> route_handoffs -> risk_summary -> END
 
-Future modules will add nodes for:
+The risk_summary node is the fourth and final specialized agent.  It produces:
+* state.risk_findings       — prioritised list of RiskFinding objects
+* state.missing_information — unresolvable information gaps
+* state.follow_ups          — recommended next steps
+* state.executive_summary   — concise narrative for a credit officer
 
-* compliance_review (Module 4)
-* risk_analysis     (Module 5)
-* handoff_router    (Module 6)
-* human_escalation  (Module 6)
-* report_assembly   (Module 7)
-
-Conditional routing between those nodes will be determined by the
-Orchestrator, which inspects the shared WorkflowState after each step.
-
-WHY LANGGRAPH?
---------------
-LangGraph allows us to:
-* Define the workflow as an explicit directed graph with typed state.
-* Add conditional edges so the Orchestrator can route dynamically.
-* Benefit from built-in checkpointing / replay when needed.
-* Integrate LLM-backed agent nodes cleanly alongside deterministic nodes.
-
-The graph uses ``WorkflowState`` (a Pydantic model) as its shared state.
-LangGraph requires that state updates are returned as *dicts* or *TypedDicts*
-by each node, so each node returns only the fields it modified.
+Module 7 will add the Orchestrator-owned report assembly node between
+risk_summary and END, consuming all four agents' outputs to produce
+state.final_report (the FinalDealReviewReport).
 
 LLM CLIENT INJECTION
 --------------------
 ``build_graph(llm_client=...)`` accepts an optional LLM client so that:
 * Integration tests can pass a ``FakeLLMClient`` without touching settings.
 * The module-level ``deal_review_graph`` (``llm_client=None``) remains safe for
-  tests that do not configure an LLM — the ``extract_terms`` node exits
-  gracefully when no client is supplied.
-* The demo script and production code can pass a real ``GoogleLLMClient``.
+  tests that do not configure an LLM.
+* The demo scripts and production code can pass a real ``GoogleLLMClient``.
 """
 
 from __future__ import annotations
@@ -68,9 +55,9 @@ NODE_INGEST_DOCUMENT = "ingest_document"
 NODE_TERM_EXTRACTION = "extract_terms"
 NODE_COMPLIANCE_REVIEW = "compliance_review"
 NODE_HANDOFF_ROUTER = "route_handoffs"
-NODE_RISK_ANALYSIS = "risk_analysis"              # Placeholder — Module 6
-NODE_HUMAN_ESCALATION = "human_escalation"        # Placeholder — Module 6
-NODE_REPORT_ASSEMBLY = "report_assembly"          # Placeholder — Module 7
+NODE_RISK_SUMMARY = "risk_summary"
+NODE_HUMAN_ESCALATION = "human_escalation"  # Placeholder — Module 7
+NODE_REPORT_ASSEMBLY = "report_assembly"     # Placeholder — Module 7
 
 
 # ── Helper: default agent statuses ────────────────────────────────────────────
@@ -593,16 +580,178 @@ def make_route_handoffs_node(llm_client: Optional[LLMClient] = None):
     return route_handoffs
 
 
+def make_risk_summary_node(llm_client: Optional[LLMClient] = None):
+    """Factory that creates a ``risk_summary`` LangGraph node.
+
+    Captures ``llm_client`` via closure so the node function has the plain
+    ``(state) -> dict`` signature required by LangGraph.
+
+    Args:
+        llm_client: Optional LLM client used solely for generating the narrative
+                    executive summary.  Risk findings themselves are always
+                    derived deterministically from existing state.
+
+    Returns:
+        A node function ``risk_summary(state: WorkflowState) -> dict``.
+    """
+    def risk_summary(state: WorkflowState) -> dict[str, Any]:
+        """Run the Risk & Summary Agent over the pipeline outputs.
+
+        Responsibilities:
+        1. Call ``RiskSummaryAgent.analyze()`` with all pipeline outputs.
+        2. Populate risk_findings, missing_information, follow_ups, executive_summary.
+        3. Emit RISK_IDENTIFIED per finding.
+        4. Emit RISK_ANALYSIS_COMPLETED.
+        5. Set run_status = COMPLETED.
+        6. Update AGENT_RISK_SUMMARY status.
+        """
+        from app.agents.risk.risk_summary import RiskSummaryAgent
+
+        logger.info("[%s] Starting risk & summary analysis.", state.run_id)
+
+        started_event = make_audit_event(
+            run_id=state.run_id,
+            event_type=AuditEventType.RISK_ANALYSIS_STARTED,
+            agent_name=AGENT_RISK_SUMMARY,
+            message=(
+                f"Risk & Summary analysis started. "
+                f"{len(state.compliance_results)} compliance result(s), "
+                f"{len(state.extracted_terms)} term(s), "
+                f"{len(state.escalations)} escalation(s)."
+            ),
+            metadata={
+                "compliance_count": len(state.compliance_results),
+                "term_count": len(state.extracted_terms),
+                "escalation_count": len(state.escalations),
+            },
+        )
+        audit_events = [*state.audit_events, started_event]
+
+        updated_statuses = {
+            **state.agent_statuses,
+            AGENT_RISK_SUMMARY: state.agent_statuses.get(
+                AGENT_RISK_SUMMARY, AgentStatus(agent_name=AGENT_RISK_SUMMARY)
+            ).mark_running(),
+        }
+
+        try:
+            agent = RiskSummaryAgent(llm_client=llm_client)
+            risk_findings, missing_information, follow_ups, executive_summary = agent.analyze(
+                compliance_results=state.compliance_results,
+                extracted_terms=state.extracted_terms,
+                evidence_registry=state.evidence_registry,
+                policy_rules=state.policy_rules,
+                escalations=state.escalations,
+            )
+        except Exception as exc:  # noqa: BLE001
+            msg = f"Risk & Summary analysis failed: {exc}"
+            logger.error("[%s] %s", state.run_id, msg, exc_info=True)
+            failed_event = make_audit_event(
+                run_id=state.run_id,
+                event_type=AuditEventType.RISK_ANALYSIS_FAILED,
+                agent_name=AGENT_RISK_SUMMARY,
+                message=msg,
+                metadata={"error": str(exc)},
+            )
+            updated_statuses[AGENT_RISK_SUMMARY] = updated_statuses[
+                AGENT_RISK_SUMMARY
+            ].mark_failed(msg)
+            return {
+                "audit_events": [*audit_events, failed_event],
+                "errors": {**state.errors, "risk_summary": msg},
+                "agent_statuses": updated_statuses,
+            }
+
+        # ── Emit per-finding audit events ────────────────────────────────────────
+        for finding in risk_findings:
+            audit_events.append(
+                make_audit_event(
+                    run_id=state.run_id,
+                    event_type=AuditEventType.RISK_IDENTIFIED,
+                    agent_name=AGENT_RISK_SUMMARY,
+                    message=(
+                        f"Risk identified: [{finding.severity.value.upper()}] "
+                        f"{finding.risk_id} — {finding.title}."
+                    ),
+                    metadata={
+                        "risk_id": finding.risk_id,
+                        "severity": finding.severity.value,
+                        "category": finding.category.value,
+                        "requires_human_review": finding.requires_human_review,
+                    },
+                )
+            )
+
+        # ── Emit completed event ───────────────────────────────────────────────
+        from app.models.risk import RiskSeverity
+        severity_counts = {}
+        for f in risk_findings:
+            severity_counts[f.severity.value] = severity_counts.get(f.severity.value, 0) + 1
+
+        completed_event = make_audit_event(
+            run_id=state.run_id,
+            event_type=AuditEventType.RISK_ANALYSIS_COMPLETED,
+            agent_name=AGENT_RISK_SUMMARY,
+            message=(
+                f"Risk & Summary analysis completed. "
+                f"{len(risk_findings)} finding(s): "
+                + ", ".join(f"{cnt} {sev}" for sev, cnt in severity_counts.items())
+                + f". {len(missing_information)} information gap(s)."
+            ),
+            metadata={
+                "finding_count": len(risk_findings),
+                "severity_counts": severity_counts,
+                "missing_information_count": len(missing_information),
+                "risk_ids": [f.risk_id for f in risk_findings],
+            },
+        )
+
+        summary_event = make_audit_event(
+            run_id=state.run_id,
+            event_type=AuditEventType.SUMMARY_GENERATION_COMPLETED,
+            agent_name=AGENT_RISK_SUMMARY,
+            message="Executive summary generated.",
+        )
+
+        updated_statuses[AGENT_RISK_SUMMARY] = updated_statuses[
+            AGENT_RISK_SUMMARY
+        ].mark_completed()
+
+        logger.info(
+            "[%s] Risk analysis complete: %d finding(s), %d gap(s).",
+            state.run_id,
+            len(risk_findings),
+            len(missing_information),
+        )
+
+        return {
+            "risk_findings": risk_findings,
+            "missing_information": missing_information,
+            "follow_ups": follow_ups,
+            "executive_summary": executive_summary,
+            "run_status": WorkflowRunStatus.COMPLETED,
+            "agent_statuses": updated_statuses,
+            "audit_events": [*audit_events, completed_event, summary_event],
+        }
+
+    return risk_summary
+
+
 def build_graph(llm_client: Optional[LLMClient] = None):
     """Build and return the compiled LangGraph StateGraph.
 
-    After Module 5 the graph is:
-        START -> initialize_run -> ingest_document -> extract_terms -> review_compliance -> route_handoffs -> END
+    After Module 6 the graph is:
+        START -> initialize_run -> ingest_document -> extract_terms
+              -> review_compliance -> route_handoffs -> risk_summary -> END
+
+    Module 7 will extend this by adding the Orchestrator-owned report assembly
+    node between risk_summary and END.
 
     Args:
-        llm_client: Optional LLM client injected into ``extract_terms`` and
-                    ``route_handoffs`` nodes.  When ``None`` (the default), nodes exit
-                    gracefully without calling any LLM.
+        llm_client: Optional LLM client injected into ``extract_terms``,
+                    ``route_handoffs``, and ``risk_summary`` nodes.  When
+                    ``None`` (the default), nodes exit gracefully without
+                    calling any LLM.
 
     Returns:
         A compiled LangGraph StateGraph ready for invocation.
@@ -615,6 +764,7 @@ def build_graph(llm_client: Optional[LLMClient] = None):
     graph.add_node(NODE_TERM_EXTRACTION, make_extract_terms_node(llm_client))
     graph.add_node(NODE_COMPLIANCE_REVIEW, make_compliance_node())
     graph.add_node(NODE_HANDOFF_ROUTER, make_route_handoffs_node(llm_client))
+    graph.add_node(NODE_RISK_SUMMARY, make_risk_summary_node(llm_client))
 
     # ── Edges ─────────────────────────────────────────────────────────────────
     graph.add_edge(START, NODE_INITIALIZE)
@@ -622,9 +772,11 @@ def build_graph(llm_client: Optional[LLMClient] = None):
     graph.add_edge(NODE_INGEST_DOCUMENT, NODE_TERM_EXTRACTION)
     graph.add_edge(NODE_TERM_EXTRACTION, NODE_COMPLIANCE_REVIEW)
     graph.add_edge(NODE_COMPLIANCE_REVIEW, NODE_HANDOFF_ROUTER)
-    graph.add_edge(NODE_HANDOFF_ROUTER, END)
+    graph.add_edge(NODE_HANDOFF_ROUTER, NODE_RISK_SUMMARY)
+    graph.add_edge(NODE_RISK_SUMMARY, END)
 
     return graph.compile()
+
 
 
 # ── Module-level compiled graph instance ─────────────────────────────────────

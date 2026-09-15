@@ -149,5 +149,8 @@ class TestFeedbackLoopIntegration:
         escalation = final_state.escalations[0]
         assert escalation["status"] == "ESCALATION_REQUIRED"
         assert "environmental_covenant" in str(escalation["requested_terms"])
-        # Verify LLM was NOT called for clarification (only 1 call for initial extract_terms node)
-        assert llm_client.call_count == 1
+        # Verify LLM was NOT called for clarification (escalated directly to human).
+        # call_count == 2: one call for initial extract_terms, one for risk summary executive summary.
+        # The clarification path itself made 0 LLM calls (confirmed by escalation path being taken).
+        assert llm_client.call_count == 2
+

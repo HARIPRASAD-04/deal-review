@@ -1,0 +1,60 @@
+MODULE 6 MILESTONE — RISK & SUMMARY AGENT
+========================================================================
+Date completed : 2026-09-16
+Total tests    : 505 passed, 0 failed, 0 skipped
+(Previous: 463 | New this module: 42 new unit & integration tests)
+
+────────────────────────────────────────────
+FILES CREATED
+────────────────────────────────────────────
+app/agents/risk/risk_summary.py
+  - RiskSummaryAgent implementation
+  - Four risk source synthesis (compliance failures, missing terms, low-confidence terms, material terms)
+  - Broad classification (financial, legal, operational, compliance, credit, reputational)
+  - Prioritisation by severity (CRITICAL, HIGH, MEDIUM, LOW)
+  - Missing information extraction & follow-up recommendations
+  - Executive summary generation (LLM structured synthesis with deterministic fallback)
+  - Strict evidence ID validation against Evidence Registry
+
+scripts/demo_risk_summary.py
+  - Full end-to-end demo of Risk & Summary Agent in LangGraph workflow
+
+tests/unit/test_risk_summary_agent.py
+  - 31 unit tests covering risk sources, evidence validation, risk ID generation, follow-ups, and summary
+
+tests/integration/test_risk_pipeline.py
+  - 11 integration tests covering graph integration, run_status preservation, executive_summary (not final_report), and evidence traceability
+
+milestones/module_6_milestone.txt (this file)
+
+────────────────────────────────────────────
+FILES MODIFIED
+────────────────────────────────────────────
+app/models/state.py
+  + missing_information: list[str]
+  + follow_ups: list[str]
+  + executive_summary: Optional[str]
+
+app/models/audit.py
+  + RISK_ASSESSMENT_STARTED
+  + RISK_ASSESSMENT_COMPLETED
+  + RISK_FINDING_IDENTIFIED
+  + EXECUTIVE_SUMMARY_STARTED
+  + EXECUTIVE_SUMMARY_COMPLETED
+  + EXECUTIVE_SUMMARY_FAILED
+
+app/llm/schemas.py
+  + SummaryOutput (Pydantic model for structured LLM summary response)
+
+app/orchestration/graph.py
+  + make_risk_summary_node() graph node factory
+  + Wires node after review_compliance/route_handoffs to populate risk_findings, missing_information, follow_ups, executive_summary
+
+────────────────────────────────────────────
+KEY VERIFICATIONS
+────────────────────────────────────────────
+1. State Ownership: Module 6 populates state.executive_summary (not state.final_report). Module 7's Orchestrator retains ownership of final report assembly.
+2. Architecture & Truth: Population of separate workflow state fields (risk_findings, missing_information, follow_ups, executive_summary) rather than container mirroring.
+3. Multi-dimensional Risk: Synthesises risks from financial, legal, operational, and compliance domains across extracted terms, missing terms, and compliance failures.
+4. Evidence Traceability: Every risk finding validates referenced EV-NNN evidence IDs against state.evidence_registry.
+5. Deterministic Resilience: Fully operational offline via deterministic fallback if LLM synthesis is unavailable or fails schema validation.

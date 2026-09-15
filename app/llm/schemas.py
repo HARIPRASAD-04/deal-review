@@ -105,3 +105,43 @@ class ExtractionOutput(BaseModel):
             "Empty list is valid when no material terms are found."
         ),
     )
+
+
+# ── Module 6: Summary generation schema ───────────────────────────────────────
+
+class SummaryOutput(BaseModel):
+    """Structured response from the LLM when generating the executive summary.
+
+    The LLM receives structured risk data (not raw PDF text) and must return
+    a concise summary grounded only in the information supplied.  Key_risks and
+    recommended_actions are capped to keep the output actionable and scannable.
+
+    Attributes:
+        executive_summary:    2-4 sentence narrative for a credit officer.
+        key_risks:            Up to 5 bullet-point risk titles (critical/high first).
+        recommended_actions:  Up to 5 specific, actionable next steps.
+    """
+
+    executive_summary: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "2-4 sentence narrative executive summary for a credit officer. "
+            "Ground every statement in the supplied risk data. "
+            "Do NOT invent information not present in the input."
+        ),
+    )
+    key_risks: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Up to 5 concise bullet-point risk titles. "
+            "Order critical and high severity risks first."
+        ),
+    )
+    recommended_actions: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Up to 5 specific, actionable next steps. "
+            "Be concrete — avoid generic advice like 'review the document'."
+        ),
+    )
