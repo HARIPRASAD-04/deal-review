@@ -1,19 +1,17 @@
-"""Minimal LangGraph orchestration graph — Module 1 skeleton.
+"""LangGraph orchestration graph — Module 2 update.
 
-This module establishes the foundational LangGraph StateGraph that all future
-agent nodes will plug into.  In Module 1 the graph is intentionally minimal:
+Graph layout after Module 2:
 
-    START → initialize_run → END
+    START → initialize_run → ingest_document → END
 
 Future modules will add nodes for:
 
-* term_extraction   (Module 2)
-* compliance_review (Module 3)
-* risk_analysis     (Module 4)
-* handoff_router    (Module 5)
-* retry_handler     (Module 5)
-* human_escalation  (Module 5)
-* report_assembly   (Module 6)
+* term_extraction   (Module 3)
+* compliance_review (Module 4)
+* risk_analysis     (Module 5)
+* handoff_router    (Module 6)
+* human_escalation  (Module 6)
+* report_assembly   (Module 7)
 
 Conditional routing between those nodes will be determined by the
 Orchestrator, which inspects the shared WorkflowState after each step.
@@ -38,6 +36,9 @@ from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 
+from app.ingestion.evidence_registry import EvidenceRegistry
+from app.ingestion.pdf_loader import load_pdf
+from app.ingestion.segmenter import segment_page
 from app.models.audit import AuditEventType, make_audit_event
 from app.models.handoff import (
     AGENT_ORCHESTRATOR,
@@ -52,12 +53,13 @@ logger = logging.getLogger(__name__)
 # ── Node names — kept as constants to avoid magic strings ─────────────────────
 
 NODE_INITIALIZE = "initialize_run"
-NODE_TERM_EXTRACTION = "term_extraction"      # Placeholder — Module 2
-NODE_COMPLIANCE_REVIEW = "compliance_review"  # Placeholder — Module 3
-NODE_RISK_ANALYSIS = "risk_analysis"          # Placeholder — Module 4
-NODE_HANDOFF_ROUTER = "handoff_router"        # Placeholder — Module 5
-NODE_HUMAN_ESCALATION = "human_escalation"    # Placeholder — Module 5
-NODE_REPORT_ASSEMBLY = "report_assembly"      # Placeholder — Module 6
+NODE_INGEST_DOCUMENT = "ingest_document"          # Module 2
+NODE_TERM_EXTRACTION = "term_extraction"          # Placeholder — Module 3
+NODE_COMPLIANCE_REVIEW = "compliance_review"      # Placeholder — Module 4
+NODE_RISK_ANALYSIS = "risk_analysis"              # Placeholder — Module 5
+NODE_HANDOFF_ROUTER = "handoff_router"            # Placeholder — Module 6
+NODE_HUMAN_ESCALATION = "human_escalation"        # Placeholder — Module 6
+NODE_REPORT_ASSEMBLY = "report_assembly"          # Placeholder — Module 7
 
 
 # ── Helper: default agent statuses ────────────────────────────────────────────
@@ -118,24 +120,120 @@ def initialize_run(state: WorkflowState) -> dict[str, Any]:
     }
 
 
+def ingest_document(state: WorkflowState) -> dict[str, Any]:
+    """Ingest the deal document PDF and populate the evidence registry.
+
+    Reads ``state.source_pdf_path`` (provided by the caller) and
+    ``state.document_id``.  Calls the PDF loader, then the segmenter, builds
+    the EvidenceRegistry, and returns updated state fields.
+
+    On fatal ingestion failure (missing file, corrupt PDF), records a
+    DOCUMENT_INGESTION_FAILED audit event and an error entry — but does NOT
+    raise, so the LangGraph run is not aborted silently.
+
+    Returns only the state fields that this node modifies.
+    """
+    logger.info("[%s] Starting document ingestion.", state.run_id)
+
+    started_event = make_audit_event(
+        run_id=state.run_id,
+        event_type=AuditEventType.DOCUMENT_INGESTION_STARTED,
+        agent_name=AGENT_ORCHESTRATOR,
+        message=f"Document ingestion started for '{state.document_id}'.",
+        metadata={"source_pdf_path": state.source_pdf_path},
+    )
+    audit_events = [*state.audit_events, started_event]
+
+    # ── Guard: no path supplied ────────────────────────────────────────────────
+    if not state.source_pdf_path:
+        msg = "source_pdf_path is not set in WorkflowState; cannot ingest document."
+        logger.warning("[%s] %s", state.run_id, msg)
+        failed_event = make_audit_event(
+            run_id=state.run_id,
+            event_type=AuditEventType.DOCUMENT_INGESTION_FAILED,
+            agent_name=AGENT_ORCHESTRATOR,
+            message=msg,
+        )
+        return {
+            "audit_events": [*audit_events, failed_event],
+            "errors": {**state.errors, "ingest_document": msg},
+        }
+
+    # ── Load PDF ───────────────────────────────────────────────────────────────
+    result = load_pdf(state.source_pdf_path, state.document_id)
+    if not result.success:
+        msg = f"PDF ingestion failed: {result.error}"
+        logger.warning("[%s] %s", state.run_id, msg)
+        failed_event = make_audit_event(
+            run_id=state.run_id,
+            event_type=AuditEventType.DOCUMENT_INGESTION_FAILED,
+            agent_name=AGENT_ORCHESTRATOR,
+            message=msg,
+            metadata={"error": result.error},
+        )
+        return {
+            "audit_events": [*audit_events, failed_event],
+            "errors": {**state.errors, "ingest_document": msg},
+        }
+
+    # ── Segment pages into evidence snippets ───────────────────────────────────
+    registry = EvidenceRegistry()
+    ev_counter = 1  # Global counter across all pages for deterministic IDs.
+
+    for page in result.pages:
+        snippets = segment_page(page, evidence_id_start=ev_counter)
+        for snippet in snippets:
+            registry.add(snippet)
+        ev_counter += len(snippets)
+
+    # ── Emit completion audit event ────────────────────────────────────────────
+    completed_event = make_audit_event(
+        run_id=state.run_id,
+        event_type=AuditEventType.DOCUMENT_INGESTION_COMPLETED,
+        agent_name=AGENT_ORCHESTRATOR,
+        message=(
+            f"Document ingestion completed for '{state.document_id}'. "
+            f"{result.metadata.page_count} page(s), "
+            f"{len(registry)} evidence snippet(s) extracted."
+        ),
+        metadata={
+            "page_count": result.metadata.page_count,
+            "evidence_count": len(registry),
+        },
+    )
+
+    logger.info(
+        "[%s] Ingestion complete: %d page(s), %d evidence snippet(s).",
+        state.run_id,
+        result.metadata.page_count,
+        len(registry),
+    )
+
+    return {
+        "document_metadata": result.metadata,
+        "evidence_registry": registry.to_dict(),
+        "audit_events": [*audit_events, completed_event],
+    }
+
+
 # ── Graph Builder ─────────────────────────────────────────────────────────────
 
 def build_graph() -> StateGraph:
-    """Build and return the LangGraph StateGraph.
+    """Build and return the compiled LangGraph StateGraph.
 
-    In Module 1 the graph contains only the ``initialize_run`` node.
+    After Module 2 the graph is:
+        START → initialize_run → ingest_document → END
+
     Future modules will register additional nodes and conditional edges.
 
     Returns:
         A compiled LangGraph StateGraph ready for invocation.
     """
-    # LangGraph requires a schema for the state it passes between nodes.
-    # We use WorkflowState (a Pydantic model) as the schema — LangGraph
-    # handles serialisation/deserialisation automatically.
     graph = StateGraph(WorkflowState)
 
     # ── Register nodes ────────────────────────────────────────────────────────
     graph.add_node(NODE_INITIALIZE, initialize_run)
+    graph.add_node(NODE_INGEST_DOCUMENT, ingest_document)
 
     # ── Future nodes (commented — to be registered in later modules) ──────────
     # graph.add_node(NODE_TERM_EXTRACTION,   term_extraction_node)
@@ -145,19 +243,10 @@ def build_graph() -> StateGraph:
     # graph.add_node(NODE_HUMAN_ESCALATION,  human_escalation_node)
     # graph.add_node(NODE_REPORT_ASSEMBLY,   report_assembly_node)
 
-    # ── Edges — Module 1: linear START → initialize → END ────────────────────
+    # ── Edges: START → initialize_run → ingest_document → END ────────────────
     graph.add_edge(START, NODE_INITIALIZE)
-    graph.add_edge(NODE_INITIALIZE, END)
-
-    # ── Future conditional edges (to be added in Module 5) ───────────────────
-    # graph.add_conditional_edges(
-    #     NODE_INITIALIZE,
-    #     route_after_init,
-    #     {
-    #         "extract": NODE_TERM_EXTRACTION,
-    #         "end": END,
-    #     },
-    # )
+    graph.add_edge(NODE_INITIALIZE, NODE_INGEST_DOCUMENT)
+    graph.add_edge(NODE_INGEST_DOCUMENT, END)
 
     return graph.compile()
 

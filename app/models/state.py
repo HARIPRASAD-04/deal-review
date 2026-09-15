@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 
 from app.models.audit import AuditEvent
 from app.models.compliance import ComplianceResult
+from app.models.document import DocumentMetadata
 from app.models.evidence import EvidenceSnippet
 from app.models.handoff import Handoff
 from app.models.policy import PolicyRule
@@ -206,9 +207,24 @@ class WorkflowState(BaseModel):
         min_length=1,
         description="Identifier of the deal document under review.",
     )
+    source_pdf_path: Optional[str] = Field(
+        default=None,
+        description=(
+            "Absolute or relative path to the source PDF file. "
+            "Provided by the caller; consumed by the ingest_document node. "
+            "None means no PDF has been supplied for this run."
+        ),
+    )
     run_status: WorkflowRunStatus = Field(
         default=WorkflowRunStatus.INITIALIZED,
         description="Overall status of the pipeline run.",
+    )
+    document_metadata: Optional[DocumentMetadata] = Field(
+        default=None,
+        description=(
+            "Structured metadata for the ingested deal document. "
+            "Populated by the ingest_document node after successful ingestion."
+        ),
     )
 
     # ── Evidence & Terms ──────────────────────────────────────────────────────
@@ -316,6 +332,15 @@ class WorkflowState(BaseModel):
         return self.model_copy(
             update={
                 "retry_counts": updated,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+
+    def set_document_metadata(self, metadata: DocumentMetadata) -> "WorkflowState":
+        """Return a new WorkflowState with document_metadata populated."""
+        return self.model_copy(
+            update={
+                "document_metadata": metadata,
                 "updated_at": datetime.now(timezone.utc),
             }
         )

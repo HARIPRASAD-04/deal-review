@@ -60,10 +60,13 @@ class EvidenceSnippet(BaseModel):
         default=None,
         description="Section identifier, e.g. '2.1' or 'Schedule A'.",
     )
-    clause: str = Field(
-        ...,
+    clause: Optional[str] = Field(
+        default=None,
         min_length=1,
-        description="Clause or heading label for the snippet.",
+        description=(
+            "Clause or heading label for the snippet. "
+            "None when no clause can be reliably detected from the source text."
+        ),
         examples=["Facility Amount"],
     )
     text: str = Field(

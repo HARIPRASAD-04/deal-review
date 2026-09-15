@@ -81,6 +81,27 @@ class TestEvidenceSnippetCreation:
         with pytest.raises(Exception):
             ev.page_number = 99  # type: ignore[misc]
 
+    def test_clause_none_is_valid(self):
+        """clause=None is now valid — used when no clause can be detected."""
+        ev = EvidenceSnippet(
+            evidence_id="EV-010",
+            document_id="DEAL-001",
+            page_number=2,
+            text="The Borrower shall maintain a minimum DSCR of 1.25x.",
+        )
+        assert ev.clause is None
+
+    def test_clause_and_section_both_none(self):
+        """Both clause and section can be None simultaneously."""
+        ev = EvidenceSnippet(
+            evidence_id="EV-011",
+            document_id="DEAL-001",
+            page_number=1,
+            text="Some body paragraph with no detectable section heading.",
+        )
+        assert ev.clause is None
+        assert ev.section is None
+
 
 # ── Invalid data — negative tests ──────────────────────────────────────────────
 
