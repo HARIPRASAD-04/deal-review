@@ -145,3 +145,117 @@ class SummaryOutput(BaseModel):
             "Be concrete — avoid generic advice like 'review the document'."
         ),
     )
+
+
+# ── Module 8: Policy extraction schema ────────────────────────────────────────
+
+class ExtractedPolicyRuleSchema(BaseModel):
+    """A single policy rule candidate returned by the LLM.
+
+    The LLM must only extract rules that are clearly and unambiguously stated
+    in the policy document.  If a statement is vague, incomplete, or cannot be
+    reliably codified, it must be placed in ``PolicyExtractionOutput.ambiguous_statements``
+    instead.
+
+    Attributes:
+        rule_id:       Verbatim rule identifier from the document (e.g. "Rule 3",
+                       "POLICY-003").  Set to ``None`` if no explicit ID appears
+                       in the document — the parser will assign a deterministic
+                       ``POLICY-EXT-NNN`` identifier.  Do NOT invent an ID.
+        name:          Short machine-friendly key for the rule (snake_case).
+        description:   Full verbatim or paraphrased description of the rule.
+        category:      Domain category.  Must be one of: financial, legal,
+                       operational, credit, regulatory, collateral, general.
+        operator:      Comparison operator: ``<=``, ``>=``, ``==``, ``!=``,
+                       ``exists``, ``in``, or ``semantic``.
+        threshold:     The required limit or value as a string.
+        severity:      Violation severity: critical, high, medium, low.
+        applicability: Optional scope (e.g. ``"term_loan"``).
+        reference:     Verbatim section/clause reference from the document.
+        is_mandatory:  Whether the rule is always applied.
+    """
+
+    rule_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Verbatim rule ID from the document. "
+            "Set to None if no explicit ID is present — do NOT invent one."
+        ),
+    )
+    name: str = Field(
+        ...,
+        min_length=1,
+        description="Short machine-friendly rule name (snake_case).",
+    )
+    description: str = Field(
+        ...,
+        min_length=1,
+        description="Full description of what this rule checks.",
+    )
+    category: str = Field(
+        ...,
+        description=(
+            "Domain category. Must be one of: "
+            "financial, legal, operational, credit, regulatory, collateral, general."
+        ),
+    )
+    operator: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Comparison operator: '<=', '>=', '==', '!=', 'exists', 'in', or 'semantic'. "
+            "Use 'semantic' when no numeric threshold is clearly stated."
+        ),
+    )
+    threshold: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Required limit or value as a string. "
+            "Use 'semantic' when the rule requires qualitative judgement."
+        ),
+    )
+    severity: str = Field(
+        default="medium",
+        description=(
+            "Violation severity. Must be one of: critical, high, medium, low. "
+            "Default to 'medium' when not explicitly stated."
+        ),
+    )
+    applicability: Optional[str] = Field(
+        default=None,
+        description="Optional scope of the rule (deal type, region, product).",
+    )
+    reference: Optional[str] = Field(
+        default=None,
+        description="Verbatim section/clause reference from the source document.",
+    )
+    is_mandatory: bool = Field(
+        default=True,
+        description="Whether the rule is always applied.",
+    )
+
+
+class PolicyExtractionOutput(BaseModel):
+    """Top-level structured response from the Policy Extraction LLM call.
+
+    The LLM must return all clearly-stated policy rules in ``rules``, and
+    place any vague or uncodifiable statements in ``ambiguous_statements``.
+    It must NOT fabricate rules for ambiguous content.
+    """
+
+    rules: list[ExtractedPolicyRuleSchema] = Field(
+        default_factory=list,
+        description=(
+            "List of clearly-stated, unambiguous policy rules extracted from the document. "
+            "Each rule must be fully supported by the document text."
+        ),
+    )
+    ambiguous_statements: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Verbatim or closely-paraphrased policy statements that could not be safely "
+            "codified as rules (vague thresholds, conditional language, incomplete rules). "
+            "Include the source text. Do NOT fabricate rules for these statements."
+        ),
+    )

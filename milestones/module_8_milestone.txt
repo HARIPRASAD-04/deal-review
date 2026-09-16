@@ -1,0 +1,78 @@
+MODULE 8 MILESTONE — APPLICATION BOUNDARY, DYNAMIC POLICY INGESTION, HUMAN UI & EVALUATION SYSTEM
+=============================================================================================
+Date completed : 2026-09-16
+Total tests    : 584 passed, 0 failed, 0 skipped
+(Previous: 531 | New this module: 53 new unit & integration tests)
+
+────────────────────────────────────────────
+FILES CREATED
+────────────────────────────────────────────
+app/ingestion/policy_parser.py
+  - parse_policy_pdf(pdf_path, llm_client) → PolicyParseResult
+  - Converts unstructured policy PDFs into validated PolicyRule objects
+  - Preserves explicit rule IDs (e.g. POLICY-001); generates deterministic POLICY-9NN IDs when implicit
+  - Surfaces ambiguous clauses in result.ambiguous_statements
+  - Never fabricates rules or substitutes default fallback rules on failure
+
+app/service.py
+  - Top-level Application Service boundary: DealReviewService, DealReviewRequest, DealReviewResponse
+  - Single functional API: service.run(request) → DealReviewResponse
+  - Keeps UI presentation-only (UI calls DealReviewService; never invokes graph directly)
+  - Enforces mandatory Deal PDF + Policy PDF requirement
+  - Hard stops on policy parsing failure without fallback to bundled rules
+
+app/ui/streamlit_app.py
+  - Human-readable Streamlit web application
+  - Dark glassmorphism styling with visual status badges
+  - Upload Deal PDF + Upload Policy PDF input forms
+  - 5 rich tabs: Executive Summary, Compliance Matrix, Extracted Terms & Evidence, Risk Findings & Escalations, Audit & Raw JSON Report
+  - One-click JSON report download button
+
+scripts/run_ui.py
+  - Streamlit UI launcher script
+
+app/evaluation/__init__.py
+  - Package init for evaluation framework
+
+app/evaluation/runner.py
+  - Non-agent deterministic evaluation infrastructure: EvaluationCase, EvaluationResult, evaluate_case()
+  - Rich assertion checks: report_integrity, review_status_match, terms_present, evidence_grounding, compliance_status, risk_categories, risk_finding_titles
+
+scripts/run_evaluation.py
+  - CLI evaluation runner script executing two evaluation cases (Standard Deal & Strict Policy Breach)
+  - Generates runtime policy PDFs via PyMuPDF (no committed binary test fixtures)
+  - Prints per-check pass/fail breakdown and scores
+
+tests/unit/test_policy_parser.py
+  - Unit tests for policy parser (missing PDF, no LLM, valid extraction, category/severity mapping, ambiguous statements)
+
+tests/unit/test_service.py
+  - Unit tests for DealReviewService boundary and policy failure hard-stops
+
+tests/unit/test_evaluation_runner.py
+  - Unit tests for EvaluationRunner assertion checks
+
+tests/integration/test_two_pdf_pipeline.py
+  - Integration tests for full two-PDF pipeline (Deal PDF + Policy PDF → FinalDealReviewReport)
+
+milestones/module_8_milestone.txt (this file)
+
+────────────────────────────────────────────
+FILES MODIFIED
+────────────────────────────────────────────
+app/llm/schemas.py
+  + Added ExtractedPolicyRuleSchema and PolicyExtractionOutput for structured policy extraction
+
+pyproject.toml
+  + Added Streamlit optional dependency group ui = ["streamlit>=1.35.0"]
+
+────────────────────────────────────────────
+KEY VERIFICATIONS
+────────────────────────────────────────────
+1. Locked 4-Agent Architecture: Term Extraction, Compliance Review, Risk & Summary, Orchestrator. Exactly four agents.
+2. Dynamic Policy PDF Ingestion: Policy PDF is required (not optional); no silent fallback to default rules on parse failure.
+3. No Rule Fabrication: Ambiguous policy statements are surfaced for review, not codified into fake rules.
+4. Presentation-Only UI: Streamlit UI consumes top-level DealReviewService; never calls build_graph() or internal nodes directly.
+5. Deterministic Evaluation Framework: Non-agent evaluation runner scores pipeline outputs against labelled ground truth.
+6. PyMuPDF Runtime Fixtures: Runtime generated policy PDFs avoid committing unnecessary test binaries.
+7. Full Test Suite & Evaluation Suite: 584 unit & integration tests passing cleanly (0 failures) and evaluation CLI scoring 1.00 across all cases.
