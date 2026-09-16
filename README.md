@@ -298,41 +298,53 @@ Delivered the production boundary: a clean external API, a dynamic policy ingest
 
 ---
 
-## Installation
+## Setup Instructions
 
-### 1. Clone the repository
+### 1. Prerequisites
+- **Python 3.11+**
+- **Git**
+
+### 2. Clone the Repository
 
 ```bash
 git clone https://github.com/HARIPRASAD-04/deal-review.git
 cd deal-review
 ```
 
-### 2. Create a virtual environment
+### 3. Create and Activate a Virtual Environment
 
 ```bash
 python -m venv .venv
-# Windows
+
+# On Windows:
 .venv\Scripts\activate
-# macOS/Linux
+
+# On macOS/Linux:
 source .venv/bin/activate
 ```
 
-### 3. Install dependencies
+### 4. Install Dependencies
+
+Install the core package in editable mode along with all optional groups (UI, Google LLM, and Development tools):
 
 ```bash
-pip install -e ".[dev]"
-
-# To run the Streamlit UI, also install the UI group:
-pip install -e ".[ui]"
+pip install -e ".[ui,llm-google,dev]"
 ```
 
-### 4. Configure environment
+### 5. Configure Environment Variables
+
+Create your local environment file from the provided example:
 
 ```bash
+# On Windows:
+copy .env.example .env
+
+# On macOS/Linux:
 cp .env.example .env
-# Edit .env and add your GOOGLE_API_KEY for real LLM extraction.
-# Without an API key, the system runs in demo mode (FakeLLMClient).
 ```
+
+Open the newly created `.env` file and add your `GOOGLE_API_KEY` for real LLM extraction (using Google Gemini). 
+*Note: Without an API key, the system safely falls back to a mock mode (`FakeLLMClient`).*
 
 ---
 
